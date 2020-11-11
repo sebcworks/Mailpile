@@ -198,6 +198,10 @@ Mailpile.Message.SetHTMLPolicy = function(mid, old_policy, new_policy) {
 
 Mailpile.Message.SandboxHTML = function(part_id, $part, html_data, policy, allow_images) {
 
+  if (allow_images === undefined) {
+    allow_images = '{{ "true" if allow_images else "false" }}';
+  }
+
   var $iframe_html = (
     '<iframe id="message-iframe-' + part_id + '" seamless');
 {% if config.prefs.html5_sandbox %}
@@ -316,6 +320,10 @@ Mailpile.Message.SandboxHTML = function(part_id, $part, html_data, policy, allow
 
 
 Mailpile.Message.ShowHTML = function(mid, policy, allow_images) {
+
+  if (allow_images === undefined) {
+    allow_images = '{{ "true" if allow_images else "false" }}';
+  }
   // HTML Parts Exist
   var $msg = $('#message-' + mid);
   var html_data = $msg.data('html');
