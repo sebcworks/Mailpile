@@ -324,7 +324,7 @@ class Rescan(Command):
                             self._progress(_('Rescanning: %s') % (src, ))
                             (messages, mailboxes) = src.rescan_now(session)
                         except ValueError:
-                            messages = 0
+                            messages = mailboxes = 0
                         if messages > 0:
                             msg_count += messages
                         mbox_count += mailboxes
@@ -1703,10 +1703,23 @@ class Pipe(Command):
     IS_USER_ACTIVITY = True
     COMMAND_SECURITY = security.CC_ACCESS_FILESYSTEM
 
+    class CommandResult(Command.CommandResult):
+        def as_text(self):
+            result = self.result or self.error_info or {}
+            output = [
+                result.get('stderr') or '',
+                result.get('stdout') or '']
+            if result.get('return_code'):
+                output.extend([
+                    '(',
+                    _('Command returned non-zero exit code: %d') % result['return_code'],
+                    ')'])
+            return ''.join(output)
+
     def command(self):
         if '--' in self.args:
             dashdash = self.args.index('--')
-            target = self.args[0:dashdash]
+            target = list(self.args[0:dashdash])
             command, args = self.args[dashdash+1], self.args[dashdash+2:]
         else:
             target, command, args = [self.args[0]], self.args[1], self.args[2:]
@@ -1730,8 +1743,11 @@ class Pipe(Command):
                 t = t[1:]
             with vfs.open(t.strip(), 'w') as fd:
                 fd.write(output.encode('utf-8'))
+            return self._success(
+                'Wrote %d bytes to %s' % (len(output), t[1:]),
+                result={})
 
-        elif '@' in target[0]:
+        if '@' in target[0]:
             from mailpile.plugins.compose import Compose
             body = 'Result as %s:\n%s' % (capture.render_mode, output)
             if capture.render_mode != 'json' and output[0] not in ('{', '['):
@@ -1739,26 +1755,39 @@ class Pipe(Command):
             composer = Compose(self.session, data={
                 'to': target,
                 'subject': ['Mailpile: %s %s' % (command, ' '.join(args))],
-                'body': [body]
-            })
+                'body': [body]})
             return self._success('Mailing output to %s' % ', '.join(target),
                                  result=composer.run())
-        else:
-            try:
-                self.session.ui.block()
-                MakePopenUnsafe()
-                kid = subprocess.Popen(target, shell=True, stdin=PIPE)
-                rv = kid.communicate(input=output.encode('utf-8'))
-            finally:
-                self.session.ui.unblock()
-                MakePopenSafe()
-                kid.wait()
-            if kid.returncode != 0:
-                return self._error('Error piping to %s' % (target, ),
-                                   info={'stderr': rv[1], 'stdout': rv[0]})
 
-        return self._success('Wrote %d bytes to %s'
-                             % (len(output), ' '.join(target)))
+        stdout = stderr = ''
+        target = [t.encode('utf-8') for t in target]
+        try:
+            self.session.ui.block()
+            popen_args = {'stdin': subprocess.PIPE}
+            if not self.session.ui.interactive:
+                popen_args.update({
+                    'stdout': subprocess.PIPE, 'stderr': subprocess.PIPE})
+
+            MakePopenUnsafe()
+            kid = subprocess.Popen(target, **popen_args)
+            MakePopenSafe()
+
+            stdout, stderr = kid.communicate(input=output.encode('utf-8'))
+        finally:
+            MakePopenSafe()
+            kid.wait()
+            self.session.ui.unblock()
+
+        result = {
+            'stdout': stdout,
+            'stderr': stderr,
+            'return_code': kid.returncode}
+        if kid.returncode != 0:
+            return self._error('Error piping to %s' % (target, ), info=result)
+        else:
+            return self._success(
+                'Wrote %d bytes to %s' % (len(output), ' '.join(target)),
+                result=result)
 
 
 class Quit(Command):
@@ -1860,29 +1889,44 @@ class Help(Command):
 
         def splash_as_text(self):
             text = [
+                '=' * 77,
                 self.result['splash']
             ]
-            if os.getenv('DISPLAY'):
-                # Launching the web browser often prints junk, move past it.
-                text[:0] = ['=' * 77]
 
-            if self.result['http_url']:
-                text.append(_('The Web interface address is: %s'
-                              ) % self.result['http_url'])
-            else:
-                text.append(_('The Web interface is disabled,'
-                              ' type `www` to turn it on.'))
+            if not self.result['web_terminal']:
+                if self.result['http_url']:
+                    text.append(_('The Web interface address is: %s'
+                                  ) % self.result['http_url'])
+                else:
+                    text.append(_('The Web interface is disabled,'
+                                  ' type `www` to turn it on.'))
+                text.append('')
 
-            text.append('')
-            b = '   * '
-            if self.result['interactive']:
-                text.append(b + _('Type `help` for instructions or `quit` '
-                                  'to quit.'))
-                text.append(b + _('Long running operations can be aborted '
-                                  'by pressing: <CTRL-C>'))
+            b = '  * '
+            if self.result['web_terminal']:
+                text.append(_('Type `help` for instructions, or try these:'))
+                text.append(b + _('Terminal') +': '+
+                    '`/full`, `/small`, `/clear`, `/close`')
+            elif self.result['interactive']:
+                text.append(b + _(
+                    'Type `help` for instructions or `quit` to quit.'))
+                text.append(b + _(
+                    'Slow operations can be aborted by pressing: <CTRL-C>'))
+
             if self.result['login_cmd'] and self.result['interactive']:
-                text.append(b + _('You can log in using the `%s` command.'
-                                  ) % self.result['login_cmd'])
+                text.append(b +
+                    _('You can log in using the `%s` command.')
+                        % self.result['login_cmd'])
+            elif self.result['interactive'] or self.result['web_terminal']:
+                text.append(b + _('System') +': '+
+                    '`sendmail`, `rescan sources`, `set sys.debug = log`')
+                text.append(b + _('Search') +': '+
+                    '`inbox`, `trash`, `search is:unread from:john`')
+                text.append(b + _('Actions') +': '+
+                    '`tag -new these`, `view 2`, `tag -new +trash 1 3 7`')
+                text.append(b + _('Output') +': '+
+                    '`spam :json`, `view 1 :html`, `view raw 1 >/tmp/msg.eml`')
+
             if self.result['in_browser']:
                 text.append(b + _('Check your web browser!'))
 
@@ -1909,7 +1953,7 @@ class Help(Command):
             width = self.result.get('width', 8)
             ckeys = cmds.keys()
             ckeys.sort(key=lambda k: (cmds[k][3], cmds[k][0]))
-            arg_width = min(50, max(14, self.session.ui.term.max_width()-70))
+            arg_width = min(50, max(14, self.session.ui.term.max_width-70))
             for c in ckeys:
                 cmd, args, explanation, rank = cmds[c]
                 if not rank or not cmd:
@@ -2059,16 +2103,21 @@ class HelpVars(Help):
 
 class HelpSplash(Help):
     """Print Mailpile splash screen"""
-    SYNOPSIS = (None, 'help/splash', 'help/splash', None)
+    SYNOPSIS = (None, 'help/splash', 'help/splash', '[web_terminal]')
     ORDER = ('Config', 9)
     CONFIG_REQUIRED = False
 
     def command(self, interactive=True):
         from mailpile.auth import Authenticate
-        http_worker = self.session.config.http_worker
+        config = self.session.config
+
+        if not self.session.ui.interactive:
+            interactive = False
+        web_terminal = 'web_terminal' in self.args
 
         in_browser = False
-        if http_worker:
+        http_worker = config.http_worker
+        if http_worker and not web_terminal:
             http_url = 'http://%s:%s%s/' % http_worker.httpd.sspec
             if (mailpile.platforms.InDesktopEnvironment()
                     and self.session.config.prefs.open_in_browser):
@@ -2082,6 +2131,7 @@ class HelpSplash(Help):
             'splash': self.ABOUT,
             'http_url': http_url,
             'in_browser': in_browser,
+            'web_terminal': web_terminal,
             'login_cmd': (Authenticate.SYNOPSIS[1]
                           if not self.session.config.loaded_config else ''),
             'interactive': interactive

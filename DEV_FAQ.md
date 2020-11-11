@@ -181,7 +181,7 @@ this.](https://github.com/mailpile/Mailpile/issues/160)
 
 Reasons!
 
-Our way may be unsual, but it's kinda awesome once you get used to it
+Our way may be unusual, but it's kinda awesome once you get used to it
 and it wasn't obvious to us how we could get this kind of behaviour from
 one of the standard frameworks.
 
@@ -267,7 +267,7 @@ the `sys.debug` can include the following terms to make various parts of
 the app more verbose:
 
     log http compose cryptostate autotag rescan keywords cache connbroker
-    vcard pop3 gnupg imap sources jinja timing sendmail httpdata
+    vcard pop3 gnupg keylookup imap sources jinja timing sendmail httpdata
 
 There are also a few other ways to examine the app state:
 
