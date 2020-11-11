@@ -313,9 +313,12 @@
 $(document).ready(function() {
   Mailpile.Message.AnalyzeMessageInline('{{mid}}');
   $('#message-{{mid}}').data('html', {{ message.html_parts|json|safe }});
+  {# Removed the line:
+     from.get('html-policy', 'none') != 'none'
+     as the policy is set inside ShowHTML function if it is "none"
+  #}
   {%- if allow_html and
-         message.html_parts|length > 0 and
-         from.get('html-policy', 'none') != 'none' %}
+         message.html_parts|length > 0 %}
     Mailpile.Message.ShowHTML(
       '{{mid}}', '{{from["html-policy"]}}',
       {% if allow_images %}true{% else %}false{% endif %});
